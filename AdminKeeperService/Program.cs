@@ -17,7 +17,7 @@ namespace AdminKeeperService
             ServiceBase[] ServicesToRun;
             ServicesToRun = new ServiceBase[]
             {
-                new Service1()
+                new AdminKeeper()
             };
             ServiceBase.Run(ServicesToRun);
         }
