@@ -18,10 +18,12 @@ namespace AdminKeeperService
 {
     public partial class AdminKeeper : ServiceBase
     {
-        private const int THREADSLEEPINTERVAL = 30 * 1000 * 60; //30 minutes
-        private const string ADMINGROUPNAME = "Administrators";
+        private const int THREAD_SLEEP_INTERVAL = 30 * 1000 * 60; //30 minutes
+        private const string ADMIN_GROUP_NAME = "Administrators";
+        private const string EXPLORER_PROCESS_NAME = "explorer.exe";
         private Thread AdminKeepingThread;
         private static Logger logger = LogManager.GetCurrentClassLogger();
+
 
         public AdminKeeper()
         {
@@ -48,30 +50,37 @@ namespace AdminKeeperService
                 {
                     logger.Info("Admin keeping thread awaked.");
                     string userName = GetCurrentUser();
-                    if (userName.Contains(@"\"))
+                    if (!string.IsNullOrEmpty(userName))
                     {
-                       userName = userName.Substring(userName.IndexOf(@"\") + 1);
+                        if (userName.Contains(@"\"))
+                        {
+                        userName = userName.Substring(userName.IndexOf(@"\") + 1);
+                        }
+                        logger.Info("Get current user's name : " + userName);
+                        List<string> AdminUsers = GetUsersInAdministrators();
+                        if (AdminUsers != null && AdminUsers.Count > 0)
+                        {
+                            if (AdminUsers.Exists(x => x.Equals(userName, StringComparison.CurrentCultureIgnoreCase)))
+                            {
+                                logger.Info($"Found {userName} in admin group");
+                            }
+                            else
+                            {
+                                logger.Info($"Can't find {userName} in admin group");
+                                AddToGroup(userName);
+                            }
+                        }
                     }
-                    logger.Info("Get current user's name : " + userName);
-                    List<string> AdminUsers = GetUsersInAdministrators();
-                    if (AdminUsers != null && AdminUsers.Count > 0)
+                    else
                     {
-                        if (AdminUsers.Exists(x => x.Equals(userName, StringComparison.CurrentCultureIgnoreCase)))
-                        {
-                            logger.Info($"Found {userName} in admin group");
-                        }
-                        else
-                        {
-                            logger.Info($"Can't find {userName} in admin group");
-                            AddToGroup(userName);
-                        }
+                        logger.Error("Can't get current user.");
                     }
                 }
                 catch (Exception ex)
                 {
                     logger.Error("Exception occurred in AdminKeepingThreadFunc : " + ex);
                 }
-                Thread.Sleep(THREADSLEEPINTERVAL);
+                Thread.Sleep(THREAD_SLEEP_INTERVAL);
             }
         }
 
@@ -83,6 +92,25 @@ namespace AdminKeeperService
                 ManagementObjectSearcher searcher = new ManagementObjectSearcher("SELECT UserName FROM Win32_ComputerSystem");
                 ManagementObjectCollection collection = searcher.Get();
                 userName = (string)collection.Cast<ManagementBaseObject>().First()["UserName"];
+                if (string.IsNullOrEmpty(userName))
+                {
+
+                    //string query = "Select * From Win32_Process Where ProcessID = " + processId;
+                    string query = "Select * from Win32_Process Where Name = \"" + EXPLORER_PROCESS_NAME + "\"";
+                    ManagementObjectSearcher Processes = new ManagementObjectSearcher(query);
+                    foreach (System.Management.ManagementObject Process in Processes.Get())
+                    {
+                        if (Process["ExecutablePath"] != null &&
+                            System.IO.Path.GetFileName(Process["ExecutablePath"].ToString()).ToLower() == EXPLORER_PROCESS_NAME)
+                        {
+                            string[] OwnerInfo = new string[2];
+                            Process.InvokeMethod("GetOwner", (object[])OwnerInfo);
+                            logger.Info(string.Format("Windows Logged-in remotely with UserName={0}", OwnerInfo[0]));
+                            userName = OwnerInfo[0];
+                            break;
+                        }
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -97,7 +125,7 @@ namespace AdminKeeperService
             try
             {
                 DirectoryEntry localMachine = new DirectoryEntry("WinNT://" + Environment.MachineName);
-                DirectoryEntry admGroup = localMachine.Children.Find(ADMINGROUPNAME, "group");
+                DirectoryEntry admGroup = localMachine.Children.Find(ADMIN_GROUP_NAME, "group");
                 object members = admGroup.Invoke("members", null);
                 foreach (object groupMember in (IEnumerable)members)
                 {
@@ -156,7 +184,7 @@ namespace AdminKeeperService
                 if (domainusr != null)
                 {
                     logger.Info("Found domain user : " + userName);
-                    groupPrincipal = GroupPrincipal.FindByIdentity(systemContext, ADMINGROUPNAME);
+                    groupPrincipal = GroupPrincipal.FindByIdentity(systemContext, ADMIN_GROUP_NAME);
 
                     if (groupPrincipal != null)
                     {
